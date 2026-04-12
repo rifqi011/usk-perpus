@@ -13,7 +13,8 @@ class ViewLoan extends ViewRecord
     protected function getHeaderActions(): array
     {
         return [
-            //
+            Actions\EditAction::make()
+                ->visible(fn () => $this->record->isActive()),
         ];
     }
 }

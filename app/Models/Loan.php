@@ -77,7 +77,7 @@ class Loan extends Model
     // Scopes
     public function scopeActive($query)
     {
-        return $query->whereIn('status', [LoanStatus::BORROWED, LoanStatus::OVERDUE]);
+        return $query->whereIn('status', [LoanStatus::BORROWED, LoanStatus::OVERDUE, LoanStatus::PARTIALLY_RETURNED]);
     }
 
     public function scopeOverdue($query)
@@ -92,7 +92,7 @@ class Loan extends Model
     // Helper methods
     public function isActive(): bool
     {
-        return in_array($this->status, [LoanStatus::BORROWED, LoanStatus::OVERDUE]);
+        return in_array($this->status, [LoanStatus::BORROWED, LoanStatus::OVERDUE, LoanStatus::PARTIALLY_RETURNED]);
     }
 
     public function isOverdue(): bool

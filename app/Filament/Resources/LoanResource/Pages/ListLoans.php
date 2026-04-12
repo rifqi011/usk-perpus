@@ -23,8 +23,12 @@ class ListLoans extends ListRecords
     {
         return [
             'all' => Tab::make('Semua'),
+            'active' => Tab::make('Aktif')
+                ->modifyQueryUsing(fn (Builder $query) => $query->active()),
             'borrowed' => Tab::make('Dipinjam')
                 ->modifyQueryUsing(fn (Builder $query) => $query->where('status', 'borrowed')),
+            'partially_returned' => Tab::make('Sebagian Kembali')
+                ->modifyQueryUsing(fn (Builder $query) => $query->where('status', 'partially_returned')),
             'overdue' => Tab::make('Terlambat')
                 ->modifyQueryUsing(fn (Builder $query) => $query->overdue()),
             'returned' => Tab::make('Dikembalikan')

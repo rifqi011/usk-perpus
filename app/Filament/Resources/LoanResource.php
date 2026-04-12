@@ -2,6 +2,7 @@
 
 namespace App\Filament\Resources;
 
+use App\Enums\LoanStatus;
 use App\Filament\Resources\LoanResource\Pages;
 use App\Models\Book;
 use App\Models\Loan;
@@ -11,31 +12,30 @@ use App\Models\MemberProfile;
 use App\Services\LoanService;
 use Filament\Forms;
 use Filament\Forms\Form;
+use Filament\Infolists;
+use Filament\Infolists\Infolist;
 use Filament\Notifications\Notification;
 use Filament\Resources\Resource;
 use Filament\Tables;
 use Filament\Tables\Table;
-use Filament\Infolists;
-use Filament\Infolists\Infolist;
+use Illuminate\Support\Facades\DB;
 
 class LoanResource extends Resource
 {
     protected static ?string $model = Loan::class;
 
     protected static ?string $navigationIcon = 'heroicon-o-arrow-path';
-    
     protected static ?string $navigationGroup = 'Transaksi';
-    
     protected static ?string $navigationLabel = 'Peminjaman';
-    
     protected static ?string $modelLabel = 'Peminjaman';
-    
     protected static ?int $navigationSort = 1;
-    
+
     public static function getNavigationBadge(): ?string
     {
-        return static::getModel()::active()->count();
+        return static::getModel()::active()->count() ?: null;
     }
+
+    // ── Form ──────────────────────────────────────────────────────────────────
 
     public static function form(Form $form): Form
     {
@@ -50,7 +50,8 @@ class LoanResource extends Resource
                             ->searchable()
                             ->preload()
                             ->native(false)
-                            ->columnSpanFull(),
+                            ->columnSpanFull()
+                            ->disabled(fn ($record) => $record !== null), // readonly on edit
                         Forms\Components\Select::make('loan_rule_id')
                             ->label('Aturan Peminjaman')
                             ->options(LoanRule::active()->pluck('name', 'id'))
@@ -69,7 +70,7 @@ class LoanResource extends Resource
                             ->rows(3)
                             ->columnSpanFull(),
                     ])->columns(2),
-                
+
                 Forms\Components\Section::make('Buku yang Dipinjam')
                     ->schema([
                         Forms\Components\Repeater::make('book_copies')
@@ -82,7 +83,7 @@ class LoanResource extends Resource
                                             ->where('available_stock', '>', 0)
                                             ->get()
                                             ->mapWithKeys(fn ($book) => [
-                                                $book->id => "{$book->title} (Stok: {$book->available_stock})"
+                                                $book->id => "{$book->title} (Stok: {$book->available_stock})",
                                             ]);
                                     })
                                     ->searchable()
@@ -91,21 +92,23 @@ class LoanResource extends Resource
                                     ->distinct()
                                     ->disableOptionsWhenSelectedInSiblingRepeaterItems()
                                     ->native(false)
-                                    ->columnSpan(2),
+                                    ->columnSpanFull(),
                             ])
-                            ->columns(2)
                             ->defaultItems(1)
                             ->minItems(1)
                             ->addActionLabel('Tambah Buku')
                             ->maxItems(10)
                             ->collapsible()
                             ->deleteAction(
-                                fn (Forms\Components\Actions\Action $action) => 
+                                fn (Forms\Components\Actions\Action $action) =>
                                     $action->hidden(fn (Forms\Get $get): bool => count($get('book_copies') ?? []) <= 1)
                             ),
-                    ]),
+                    ])
+                    ->hidden(fn ($record) => $record !== null), // hide on edit
             ]);
     }
+
+    // ── Table ─────────────────────────────────────────────────────────────────
 
     public static function table(Table $table): Table
     {
@@ -132,16 +135,22 @@ class LoanResource extends Resource
                     ->label('Tgl Kembali')
                     ->date('d M Y')
                     ->sortable()
+                    ->placeholder('-')
                     ->toggleable(),
                 Tables\Columns\BadgeColumn::make('status')
                     ->label('Status')
                     ->colors([
-                        'info' => 'borrowed',
+                        'info'    => 'borrowed',
                         'success' => 'returned',
                         'warning' => 'partially_returned',
-                        'danger' => 'overdue',
+                        'danger'  => 'overdue',
                     ])
                     ->formatStateUsing(fn ($state) => $state->label()),
+                Tables\Columns\TextColumn::make('details_count')
+                    ->label('Buku')
+                    ->counts('details')
+                    ->badge()
+                    ->color('gray'),
                 Tables\Columns\TextColumn::make('total_fine')
                     ->label('Total Denda')
                     ->money('IDR')
@@ -149,10 +158,26 @@ class LoanResource extends Resource
                     ->toggleable(),
             ])
             ->filters([
-                //
+                Tables\Filters\SelectFilter::make('status')
+                    ->label('Status')
+                    ->options([
+                        'borrowed'           => 'Dipinjam',
+                        'returned'           => 'Dikembalikan',
+                        'partially_returned' => 'Sebagian Dikembalikan',
+                        'overdue'            => 'Terlambat',
+                    ]),
+                Tables\Filters\SelectFilter::make('member_id')
+                    ->label('Anggota')
+                    ->relationship('member', 'full_name')
+                    ->searchable()
+                    ->preload(),
             ])
             ->actions([
                 Tables\Actions\ViewAction::make(),
+                Tables\Actions\EditAction::make()
+                    ->visible(fn ($record) => $record->isActive()),
+
+                // ── Kembalikan ────────────────────────────────────────────
                 Tables\Actions\Action::make('return')
                     ->label('Kembalikan')
                     ->icon('heroicon-o-arrow-uturn-left')
@@ -163,15 +188,15 @@ class LoanResource extends Resource
                             ->where('status', '!=', 'returned')
                             ->with('book')
                             ->get();
-                        
+
                         return [
                             Forms\Components\Repeater::make('returns')
-                                ->label('Buku yang Dikembalikan')
+                                ->label('Pilih buku yang dikembalikan')
                                 ->schema([
                                     Forms\Components\Select::make('loan_detail_id')
                                         ->label('Buku')
-                                        ->options($unreturned->mapWithKeys(fn ($detail) => [
-                                            $detail->id => $detail->book->title
+                                        ->options($unreturned->mapWithKeys(fn ($d) => [
+                                            $d->id => $d->book->title,
                                         ]))
                                         ->required()
                                         ->distinct()
@@ -192,18 +217,17 @@ class LoanResource extends Resource
                             $returnData = collect($data['returns'])
                                 ->mapWithKeys(fn ($item) => [
                                     $item['loan_detail_id'] => [
-                                        'condition' => $item['condition'],
                                         'notes' => $item['notes'] ?? null,
-                                    ]
+                                    ],
                                 ])
                                 ->toArray();
-                            
+
                             $loan = $loanService->processReturn($record, $returnData);
-                            
+
                             Notification::make()
                                 ->success()
                                 ->title('Pengembalian Berhasil')
-                                ->body("Total denda: Rp " . number_format($loan->total_fine, 0, ',', '.'))
+                                ->body('Total denda: Rp ' . number_format($loan->total_fine, 0, ',', '.'))
                                 ->send();
                         } catch (\Exception $e) {
                             Notification::make()
@@ -213,12 +237,47 @@ class LoanResource extends Resource
                                 ->send();
                         }
                     }),
+
+                // ── Delete ────────────────────────────────────────────────
+                Tables\Actions\DeleteAction::make()
+                    ->visible(fn ($record) => $record->status === LoanStatus::BORROWED)
+                    ->before(function ($record) {
+                        // Restore stok semua buku sebelum hapus
+                        DB::transaction(function () use ($record) {
+                            foreach ($record->details as $detail) {
+                                if (!$detail->isReturned()) {
+                                    $book = $detail->book;
+                                    if ($book && $book->available_stock < $book->stock) {
+                                        $book->increment('available_stock');
+                                    }
+                                }
+                            }
+                        });
+                    }),
             ])
             ->bulkActions([
-                //
+                Tables\Actions\BulkActionGroup::make([
+                    Tables\Actions\DeleteBulkAction::make()
+                        ->before(function ($records) {
+                            foreach ($records as $record) {
+                                if ($record->status === LoanStatus::BORROWED) {
+                                    foreach ($record->details as $detail) {
+                                        if (!$detail->isReturned()) {
+                                            $book = $detail->book;
+                                            if ($book && $book->available_stock < $book->stock) {
+                                                $book->increment('available_stock');
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }),
+                ]),
             ])
             ->defaultSort('loan_date', 'desc');
     }
+
+    // ── Infolist ──────────────────────────────────────────────────────────────
 
     public static function infolist(Infolist $infolist): Infolist
     {
@@ -232,6 +291,8 @@ class LoanResource extends Resource
                             ->label('Anggota'),
                         Infolists\Components\TextEntry::make('member.member_code')
                             ->label('Kode Anggota'),
+                        Infolists\Components\TextEntry::make('loanRule.name')
+                            ->label('Aturan Peminjaman'),
                         Infolists\Components\TextEntry::make('loan_date')
                             ->label('Tanggal Pinjam')
                             ->date('d F Y'),
@@ -242,17 +303,11 @@ class LoanResource extends Resource
                         Infolists\Components\TextEntry::make('return_date')
                             ->label('Tanggal Kembali')
                             ->date('d F Y')
-                            ->visible(fn ($record) => $record->return_date !== null),
+                            ->placeholder('-'),
                         Infolists\Components\TextEntry::make('status')
                             ->label('Status')
                             ->badge()
-                            ->color(fn ($state) => match($state->value) {
-                                'borrowed' => 'info',
-                                'returned' => 'success',
-                                'partially_returned' => 'warning',
-                                'overdue' => 'danger',
-                                default => 'gray',
-                            })
+                            ->color(fn ($state) => $state->color())
                             ->formatStateUsing(fn ($state) => $state->label()),
                         Infolists\Components\TextEntry::make('total_late_days')
                             ->label('Hari Terlambat')
@@ -264,9 +319,9 @@ class LoanResource extends Resource
                         Infolists\Components\TextEntry::make('notes')
                             ->label('Catatan')
                             ->columnSpanFull()
-                            ->visible(fn ($record) => $record->notes !== null),
+                            ->placeholder('-'),
                     ])->columns(3),
-                
+
                 Infolists\Components\Section::make('Detail Buku')
                     ->schema([
                         Infolists\Components\RepeatableEntry::make('details')
@@ -289,6 +344,7 @@ class LoanResource extends Resource
                                 Infolists\Components\TextEntry::make('status')
                                     ->label('Status')
                                     ->badge()
+                                    ->color(fn ($state) => $state->color())
                                     ->formatStateUsing(fn ($state) => $state->label()),
                                 Infolists\Components\TextEntry::make('fine_amount')
                                     ->label('Denda')
@@ -296,7 +352,7 @@ class LoanResource extends Resource
                             ])
                             ->columns(3),
                     ]),
-                
+
                 Infolists\Components\Section::make('Informasi Tambahan')
                     ->schema([
                         Infolists\Components\TextEntry::make('creator.name')
@@ -306,21 +362,24 @@ class LoanResource extends Resource
                             ->dateTime('d F Y H:i'),
                         Infolists\Components\TextEntry::make('returner.name')
                             ->label('Dikembalikan Oleh')
-                            ->visible(fn ($record) => $record->returned_by !== null),
+                            ->placeholder('-'),
                         Infolists\Components\TextEntry::make('return_processed_at')
                             ->label('Diproses Pada')
                             ->dateTime('d F Y H:i')
-                            ->visible(fn ($record) => $record->return_processed_at !== null),
+                            ->placeholder('-'),
                     ])->columns(2),
             ]);
     }
 
+    // ── Pages ─────────────────────────────────────────────────────────────────
+
     public static function getPages(): array
     {
         return [
-            'index' => Pages\ListLoans::route('/'),
+            'index'  => Pages\ListLoans::route('/'),
             'create' => Pages\CreateLoan::route('/create'),
-            'view' => Pages\ViewLoan::route('/{record}'),
+            'edit'   => Pages\EditLoan::route('/{record}/edit'),
+            'view'   => Pages\ViewLoan::route('/{record}'),
         ];
     }
 }

@@ -36,9 +36,9 @@ class ProcessReturnAction
                 }
 
                 // Hitung keterlambatan
-                $lateDays = max(0, now()->diffInDays($detail->due_date, false));
-                $loanRule = $loan->loanRule;
-                $effectiveLateDays = max(0, $lateDays - ($loanRule->grace_days ?? 0));
+                $lateDays = $detail->due_date->isPast()
+                    ? (int) now()->startOfDay()->diffInDays($detail->due_date->startOfDay())
+                    : 0;
 
                 $detail->update([
                     'returned_at'  => now(),
@@ -49,10 +49,13 @@ class ProcessReturnAction
                 ]);
 
                 // Hitung denda
-                $this->calculateFineAction->execute($detail, $loanRule);
+                $this->calculateFineAction->execute($detail, $loan->loanRule);
 
-                // Kembalikan stok buku
-                $detail->book->increment('available_stock');
+                // Kembalikan stok buku — pastikan tidak melebihi total stok
+                $book = $detail->book;
+                if ($book->available_stock < $book->stock) {
+                    $book->increment('available_stock');
+                }
             }
 
             // Cek apakah semua buku sudah dikembalikan
