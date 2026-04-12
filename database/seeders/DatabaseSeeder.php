@@ -13,6 +13,7 @@ class DatabaseSeeder extends Seeder
             SuperAdminSeeder::class,
             LoanRuleSeeder::class,
             SiteSettingSeeder::class,
+            TestDataSeeder::class,
         ]);
     }
 }
