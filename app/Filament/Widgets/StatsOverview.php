@@ -11,39 +11,49 @@ use Filament\Widgets\StatsOverviewWidget\Stat;
 
 class StatsOverview extends BaseWidget
 {
+    protected static ?int $sort = 1;
+
     protected function getStats(): array
     {
+        $activeLoans    = Loan::active()->count();
+        $overdueLoans   = Loan::where('status', 'overdue')
+            ->orWhere(fn ($q) => $q->where('status', 'borrowed')->where('due_date', '<', now()))
+            ->count();
+        $totalMembers   = MemberProfile::active()->count();
+        $totalBooks     = Book::active()->count();
+        $availableBooks = Book::active()->where('available_stock', '>', 0)->count();
+        $unpaidFines    = Fine::unpaid()->sum('amount');
+
         return [
-            Stat::make('Total Anggota Aktif', MemberProfile::active()->count())
-                ->description('Anggota dengan status aktif')
-                ->descriptionIcon('heroicon-m-users')
-                ->color('success')
-                ->chart([7, 3, 4, 5, 6, 3, 5, 3]),
-            
-            Stat::make('Total Buku', Book::count())
-                ->description(Book::sum('stock') . ' total eksemplar')
-                ->descriptionIcon('heroicon-m-book-open')
-                ->color('info'),
-            
-            Stat::make('Copy Tersedia', Book::sum('available_stock'))
-                ->description('Siap dipinjam')
-                ->descriptionIcon('heroicon-m-check-circle')
-                ->color('success'),
-            
-            Stat::make('Pinjaman Aktif', Loan::active()->count())
+            Stat::make('Peminjaman Aktif', $activeLoans)
                 ->description('Sedang dipinjam')
                 ->descriptionIcon('heroicon-m-arrow-trending-up')
-                ->color('warning'),
-            
-            Stat::make('Pinjaman Terlambat', Loan::overdue()->count())
+                ->color('info')
+                ->icon('heroicon-o-arrow-path'),
+
+            Stat::make('Terlambat', $overdueLoans)
                 ->description('Melewati jatuh tempo')
                 ->descriptionIcon('heroicon-m-exclamation-triangle')
-                ->color('danger'),
-            
-            Stat::make('Denda Belum Dibayar', 'Rp ' . number_format(Fine::unpaid()->sum('amount'), 0, ',', '.'))
-                ->description('Total outstanding')
-                ->descriptionIcon('heroicon-m-currency-dollar')
-                ->color('danger'),
+                ->color($overdueLoans > 0 ? 'danger' : 'success')
+                ->icon('heroicon-o-clock'),
+
+            Stat::make('Anggota Aktif', $totalMembers)
+                ->description('Terdaftar & aktif')
+                ->descriptionIcon('heroicon-m-users')
+                ->color('success')
+                ->icon('heroicon-o-users'),
+
+            Stat::make('Total Buku', $totalBooks)
+                ->description("{$availableBooks} judul tersedia")
+                ->descriptionIcon('heroicon-m-book-open')
+                ->color('warning')
+                ->icon('heroicon-o-book-open'),
+
+            Stat::make('Denda Belum Dibayar', 'Rp ' . number_format($unpaidFines, 0, ',', '.'))
+                ->description('Total denda outstanding')
+                ->descriptionIcon('heroicon-m-banknotes')
+                ->color($unpaidFines > 0 ? 'danger' : 'success')
+                ->icon('heroicon-o-banknotes'),
         ];
     }
 }
